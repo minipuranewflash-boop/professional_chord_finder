@@ -1,0 +1,364 @@
+import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:just_audio/just_audio.dart';
+import 'package:share_plus/share_plus.dart';
+import 'dart:ui';
+import '../models/chord.dart';
+
+class ChordViewerScreen extends StatefulWidget {
+  final String filePath;
+  final String fileName;
+  final ChordProgression progression;
+
+  const ChordViewerScreen({
+    Key? key,
+    required this.filePath,
+    required this.fileName,
+    required this.progression,
+  }) : super(key: key);
+
+  @override
+  State<ChordViewerScreen> createState() => _ChordViewerScreenState();
+}
+
+class _ChordViewerScreenState extends State<ChordViewerScreen> {
+  late AudioPlayer _audioPlayer;
+  bool _isPlaying = false;
+  Duration _position = Duration.zero;
+  Duration _duration = Duration.zero;
+
+  @override
+  void initState() {
+    super.initState();
+    _audioPlayer = AudioPlayer();
+    _initAudioPlayer();
+  }
+
+  Future<void> _initAudioPlayer() async {
+    try {
+      await _audioPlayer.setFilePath(widget.filePath);
+      
+      _audioPlayer.durationStream.listen((d) {
+        setState(() => _duration = d ?? Duration.zero);
+      });
+      
+      _audioPlayer.positionStream.listen((p) {
+        setState(() => _position = p);
+      });
+      
+      _audioPlayer.playerStateStream.listen((state) {
+        setState(() => _isPlaying = state.playing);
+      });
+    } catch (e) {
+      print('Error initializing audio player: `$e');
+    }
+  }
+
+  @override
+  void dispose() {
+    _audioPlayer.dispose();
+    super.dispose();
+  }
+
+  void _togglePlayPause() {
+    if (_isPlaying) {
+      _audioPlayer.pause();
+    } else {
+      _audioPlayer.play();
+    }
+  }
+
+  String _formatDuration(Duration d) {
+    String twoDigits(int n) => n.toString().padLeft(2, '0');
+    String minutes = twoDigits(d.inMinutes.remainder(60));
+    String seconds = twoDigits(d.inSeconds.remainder(60));
+    return '`$minutes:`$seconds';
+  }
+
+  ChordInfo? _getCurrentChord() {
+    double currentTime = _position.inMilliseconds / 1000.0;
+    for (var chord in widget.progression.chords) {
+      if (currentTime >= chord.timestamp && currentTime < chord.timestamp + chord.duration) {
+        return chord;
+      }
+    }
+    return null;
+  }
+
+  Color _getChordColor(String quality) {
+    switch (quality) {
+      case 'major':
+        return Color(0xFF00D4FF);
+      case 'minor':
+        return Color(0xFFBB86FC);
+      case 'dominant7':
+        return Color(0xFFFFB84D);
+      case 'major7':
+        return Color(0xFF00FFA3);
+      case 'minor7':
+        return Color(0xFFFF6B9D);
+      case 'diminished':
+        return Color(0xFFFF5252);
+      case 'augmented':
+        return Color(0xFFFFD700);
+      default:
+        return Colors.white70;
+    }
+  }
+
+  void _shareChordSheet() {
+    String text = widget.progression.toPlainText();
+    Share.share(text, subject: 'Chords for $''{widget.fileName}');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    ChordInfo? currentChord = _getCurrentChord();
+
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: Color(0xFF1E1E2E),
+        elevation: 0,
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Chord Analysis',
+              style: GoogleFonts.inter(fontSize: 18, fontWeight: FontWeight.w600),
+            ),
+            Text(
+              widget.fileName,
+              style: GoogleFonts.inter(fontSize: 12, color: Colors.white60),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+        ),
+        actions: [
+          IconButton(
+            icon: Icon(Icons.share),
+            onPressed: _shareChordSheet,
+            tooltip: 'Share Chord Sheet',
+          ),
+        ],
+      ),
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0xFF1E1E2E), Color(0xFF0F0F1A)],
+          ),
+        ),
+        child: Column(
+          children: [
+            // Current chord display
+            Container(
+              padding: EdgeInsets.all(32),
+              child: Column(
+                children: [
+                  Text(
+                    'Current Chord',
+                    style: GoogleFonts.inter(
+                      fontSize: 14,
+                      color: Colors.white60,
+                      letterSpacing: 1.5,
+                    ),
+                  ),
+                  SizedBox(height: 16),
+                  AnimatedSwitcher(
+                    duration: Duration(milliseconds: 300),
+                    child: Text(
+                      currentChord?.displayName ?? '---',
+                      key: ValueKey(currentChord?.displayName ?? 'none'),
+                      style: GoogleFonts.inter(
+                        fontSize: 72,
+                        fontWeight: FontWeight.w900,
+                        color: currentChord != null
+                            ? _getChordColor(currentChord.quality)
+                            : Colors.white30,
+                      ),
+                    ),
+                  ),
+                  if (currentChord != null)
+                    Text(
+                      '${(currentChord.confidence * 100).toStringAsFixed(0)}% confidence',
+                      style: GoogleFonts.inter(
+                        fontSize: 14,
+                        color: Colors.white.withOpacity(0.5),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+
+            // Audio player controls
+            Container(
+              margin: EdgeInsets.symmetric(horizontal: 24),
+              padding: EdgeInsets.all(20),
+              decoration: BoxDecoration(
+                color: Colors.white.withOpacity(0.05),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.white.withOpacity(0.1)),
+              ),
+              child: Column(
+                children: [
+                  // Progress bar
+                  SliderTheme(
+                    data: SliderThemeData(
+                      trackHeight: 4,
+                      thumbShape: RoundSliderThumbShape(enabledThumbRadius: 6),
+                    ),
+                    child: Slider(
+                      value: _position.inMilliseconds.toDouble(),
+                      max: _duration.inMilliseconds.toDouble().clamp(1, double.infinity),
+                      onChanged: (value) {
+                        _audioPlayer.seek(Duration(milliseconds: value.toInt()));
+                      },
+                      activeColor: Color(0xFF00D4FF),
+                      inactiveColor: Colors.white24,
+                    ),
+                  ),
+                  
+                  // Time labels
+                  Padding(
+                    padding: EdgeInsets.symmetric(horizontal: 8),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          _formatDuration(_position),
+                          style: GoogleFonts.inter(fontSize: 12, color: Colors.white70),
+                        ),
+                        Text(
+                          _formatDuration(_duration),
+                          style: GoogleFonts.inter(fontSize: 12, color: Colors.white70),
+                        ),
+                      ],
+                    ),
+                  ),
+                  
+                  SizedBox(height: 16),
+                  
+                  // Play/Pause button
+                  IconButton(
+                    onPressed: _togglePlayPause,
+                    icon: Icon(_isPlaying ? Icons.pause_circle_filled : Icons.play_circle_filled),
+                    iconSize: 64,
+                    color: Color(0xFF00D4FF),
+                  ),
+                ],
+              ),
+            ),
+
+            SizedBox(height: 24),
+
+            // Chord list
+            Expanded(
+              child: Container(
+                margin: EdgeInsets.symmetric(horizontal: 24),
+                decoration: BoxDecoration(
+                  color: Colors.white.withOpacity(0.05),
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                  border: Border.all(color: Colors.white.withOpacity(0.1)),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Padding(
+                      padding: EdgeInsets.all(20),
+                      child: Row(
+                        children: [
+                          Icon(Icons.queue_music, color: Color(0xFF00D4FF)),
+                          SizedBox(width: 12),
+                          Text(
+                            'Chord Progression ($''{widget.progression.chords.length} chords)',
+                            style: GoogleFonts.inter(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Divider(color: Colors.white12, height: 1),
+                    Expanded(
+                      child: ListView.builder(
+                        padding: EdgeInsets.all(16),
+                        itemCount: widget.progression.chords.length,
+                        itemBuilder: (context, index) {
+                          ChordInfo chord = widget.progression.chords[index];
+                          bool isCurrent = currentChord == chord;
+                          
+                          return Container(
+                            margin: EdgeInsets.only(bottom: 12),
+                            padding: EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: isCurrent
+                                  ? _getChordColor(chord.quality).withOpacity(0.2)
+                                  : Colors.white.withOpacity(0.03),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: isCurrent
+                                    ? _getChordColor(chord.quality)
+                                    : Colors.white.withOpacity(0.1),
+                                width: isCurrent ? 2 : 1,
+                              ),
+                            ),
+                            child: Row(
+                              children: [
+                                Container(
+                                  width: 60,
+                                  child: Text(
+                                    _formatDuration(Duration(
+                                      milliseconds: (chord.timestamp * 1000).toInt(),
+                                    )),
+                                    style: GoogleFonts.inter(
+                                      fontSize: 14,
+                                      color: Colors.white60,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                  ),
+                                ),
+                                SizedBox(width: 16),
+                                Container(
+                                  padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                                  decoration: BoxDecoration(
+                                    color: _getChordColor(chord.quality).withOpacity(0.2),
+                                    borderRadius: BorderRadius.circular(8),
+                                  ),
+                                  child: Text(
+                                    chord.displayName,
+                                    style: GoogleFonts.inter(
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.w700,
+                                      color: _getChordColor(chord.quality),
+                                    ),
+                                  ),
+                                ),
+                                Spacer(),
+                                Text(
+                                  '${(chord.confidence * 100).toStringAsFixed(0)}%',
+                                  style: GoogleFonts.inter(
+                                    fontSize: 12,
+                                    color: Colors.white.withOpacity(0.5),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            SizedBox(height: 24),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
